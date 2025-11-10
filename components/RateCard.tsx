@@ -2,12 +2,15 @@ import React from 'react';
 
 interface RateCardProps {
   title: string;
-  value: number;
+  value: number | null | undefined;
   type: 'moneyMarket' | 'fx';
 }
 
 export default function RateCard({ title, value, type }: RateCardProps) {
-  const formatValue = (val: number, type: 'moneyMarket' | 'fx') => {
+  const formatValue = (val: number | null | undefined, type: 'moneyMarket' | 'fx') => {
+    if (val === null || val === undefined || typeof val !== 'number') {
+      return 'N/A';
+    }
     if (type === 'moneyMarket') {
       return `${val.toFixed(2)}%`;
     }

@@ -2,23 +2,80 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
+const dataService = require('./services/dataService');
+const stressAnalyzer = require('./services/stressAnalyzer');
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
 
-// Mock data generator for demonstration
-// In production, replace with real API calls to financial data providers
-const generateMockData = () => {
+// Enhanced mock data generator with all sophisticated metrics
+const generateEnhancedMockData = () => {
   const now = new Date();
-  const baseRates = {
-    SOFR: 5.25 + (Math.random() - 0.5) * 0.5,
-    'LIBOR-USD-3M': 5.30 + (Math.random() - 0.5) * 0.5,
-    EURIBOR: 3.75 + (Math.random() - 0.5) * 0.3,
-    SONIA: 5.00 + (Math.random() - 0.5) * 0.4,
+  
+  // Base rates with realistic relationships
+  const iorb = 4.50 + (Math.random() - 0.5) * 0.1;
+  const effr = iorb - 0.05 + (Math.random() - 0.5) * 0.1;
+  const sofr = iorb + 0.02 + (Math.random() - 0.5) * 0.15;
+  const obfr = effr + 0.01 + (Math.random() - 0.5) * 0.05;
+
+  // Granular repo rates
+  const tgcr = sofr - 0.01 + (Math.random() - 0.5) * 0.05;
+  const bgcr = sofr - 0.005 + (Math.random() - 0.5) * 0.03;
+  const gcf = tgcr + 0.005 + (Math.random() - 0.5) * 0.08;
+  const onrrp = iorb - 0.30 + (Math.random() - 0.5) * 0.05;
+
+  const rates = {
+    SOFR: sofr,
+    BGCR: bgcr,
+    TGCR: tgcr,
+    GCF: gcf,
+    EFFR: effr,
+    OBFR: obfr,
+    IORB: iorb,
+    'O/N-RRP': onrrp,
+    EURIBOR: 3.75 + (Math.random() - 0.5) * 0.2,
+    SONIA: 5.00 + (Math.random() - 0.5) * 0.2,
   };
 
+  // Calculate percentiles (simulated)
+  const sofrSeries = Array.from({ length: 30 }, () => sofr + (Math.random() - 0.5) * 0.2);
+  sofrSeries.sort((a, b) => a - b);
+  const percentiles = {
+    p25: sofrSeries[7],
+    p50: sofrSeries[15],
+    p75: sofrSeries[22],
+    p99: sofrSeries[29],
+  };
+
+  // Fed facilities
+  const facilities = {
+    'O/N-RRP-Volume': 150 + (Math.random() - 0.5) * 50, // in billions
+    'Foreign-Repo-Pool': 350 + (Math.random() - 0.5) * 30,
+    'SRF-Volume': Math.random() > 0.9 ? 5 + Math.random() * 10 : 0, // Occasional spikes
+  };
+
+  // Calculate spreads
+  const spreads = {
+    'EFFR-IORB': (effr - iorb) * 100,
+    'SOFR-IORB': (sofr - iorb) * 100,
+    'SOFR-EFFR': (sofr - effr) * 100,
+    'TGCR-RRP': (tgcr - onrrp) * 100,
+    'GCF-TGCR': (gcf - tgcr) * 100,
+  };
+
+  // Reserve scarcity status
+  const reserveScarcity = {
+    'EFFR-IORB-Status': spreads['EFFR-IORB'] > 0 ? 'SCARCITY' : 
+                        spreads['EFFR-IORB'] < -5 ? 'ABUNDANCE' : 'AMPLE',
+    'SOFR-IORB-Status': spreads['SOFR-IORB'] > 0 ? 'BANKS-DEPLOYING-RESERVES' : 'NORMAL',
+    'TGCR-RRP-Status': spreads['TGCR-RRP'] > 0 ? 'EXCESS-COLLATERAL' : 'EXCESS-CASH',
+    'GCF-TGCR-Status': spreads['GCF-TGCR'] > 0 ? 'INFLEXIBLE-BALANCE-SHEETS' : 'FLEXIBLE-BALANCE-SHEETS',
+  };
+
+  // FX rates
   const fxRates = {
     'EUR/USD': 1.08 + (Math.random() - 0.5) * 0.02,
     'GBP/USD': 1.26 + (Math.random() - 0.5) * 0.02,
@@ -26,119 +83,230 @@ const generateMockData = () => {
     'USD/CHF': 0.88 + (Math.random() - 0.5) * 0.01,
   };
 
-  // Generate historical data (last 30 days)
+  // XCCY Basis (simulated)
+  const xccyBasis = {
+    'EUR/USD-3M': -3.5 + (Math.random() - 0.5) * 2.0,
+    'GBP/USD-3M': -2.0 + (Math.random() - 0.5) * 1.5,
+  };
+
+  // Generate historical data (90 days)
   const historical = [];
-  for (let i = 29; i >= 0; i--) {
+  const historicalRates = {
+    SOFR: [],
+    EFFR: [],
+    IORB: [],
+    'EFFR-IORB': [],
+    'SOFR-IORB': [],
+    'TGCR-RRP': [],
+  };
+
+  for (let i = 89; i >= 0; i--) {
     const date = new Date(now);
     date.setDate(date.getDate() - i);
+    const dateStr = date.toISOString().split('T')[0];
+
+    const hSofr = sofr + (Math.random() - 0.5) * 0.3;
+    const hEffr = effr + (Math.random() - 0.5) * 0.2;
+    const hIorb = iorb + (Math.random() - 0.5) * 0.1;
+    const hTgcr = tgcr + (Math.random() - 0.5) * 0.15;
+    const hOnrrp = onrrp + (Math.random() - 0.5) * 0.05;
+
     historical.push({
-      date: date.toISOString().split('T')[0],
-      SOFR: baseRates.SOFR + (Math.random() - 0.5) * 0.3,
-      EURIBOR: baseRates.EURIBOR + (Math.random() - 0.5) * 0.2,
+      date: dateStr,
+      SOFR: hSofr,
+      EFFR: hEffr,
+      IORB: hIorb,
+      BGCR: bgcr + (Math.random() - 0.5) * 0.1,
+      TGCR: hTgcr,
+      GCF: gcf + (Math.random() - 0.5) * 0.1,
+      'EFFR-IORB': (hEffr - hIorb) * 100,
+      'SOFR-IORB': (hSofr - hIorb) * 100,
+      'TGCR-RRP': (hTgcr - hOnrrp) * 100,
       'EUR/USD': fxRates['EUR/USD'] + (Math.random() - 0.5) * 0.015,
-      'GBP/USD': fxRates['GBP/USD'] + (Math.random() - 0.5) * 0.015,
     });
+
+    historicalRates.SOFR.push(hSofr);
+    historicalRates.EFFR.push(hEffr);
+    historicalRates.IORB.push(hIorb);
+    historicalRates['EFFR-IORB'].push((hEffr - hIorb) * 100);
+    historicalRates['SOFR-IORB'].push((hSofr - hIorb) * 100);
+    historicalRates['TGCR-RRP'].push((hTgcr - hOnrrp) * 100);
   }
 
   return {
     current: {
-      moneyMarket: baseRates,
+      rates,
+      repo: {
+        SOFR: sofr,
+        BGCR: bgcr,
+        TGCR: tgcr,
+        GCF: gcf,
+        'O/N-RRP': onrrp,
+      },
+      moneyMarket: {
+        EFFR: effr,
+        OBFR: obfr,
+        IORB: iorb,
+      },
+      spreads,
+      reserveScarcity,
+      facilities,
       fx: fxRates,
+      xccyBasis,
+      percentiles: {
+        SOFR: percentiles,
+      },
       timestamp: now.toISOString(),
     },
     historical,
+    historicalRates,
   };
 };
 
-// Calculate stress indicators
-const calculateStressIndicators = (data) => {
-  const { current, historical } = data;
-  
-  // Calculate volatility (standard deviation of recent changes)
-  const recentChanges = historical.slice(-7).map((d, i) => {
-    if (i === 0) return 0;
-    return Math.abs(d.SOFR - historical[i - 1].SOFR);
-  });
-  const volatility = recentChanges.reduce((a, b) => a + b, 0) / recentChanges.length;
-
-  // Calculate spread (difference between key rates)
-  const spread = Math.abs(current.moneyMarket.SOFR - current.moneyMarket.EURIBOR);
-
-  // Calculate FX volatility
-  const fxChanges = historical.slice(-7).map((d, i) => {
-    if (i === 0) return 0;
-    return Math.abs(d['EUR/USD'] - historical[i - 1]['EUR/USD']);
-  });
-  const fxVolatility = fxChanges.reduce((a, b) => a + b, 0) / fxChanges.length;
-
-  // Normalize stress score (0-100)
-  const stressScore = Math.min(100, (volatility * 20 + spread * 2 + fxVolatility * 50));
-
-  let stressLevel = 'low';
-  if (stressScore > 70) stressLevel = 'critical';
-  else if (stressScore > 50) stressLevel = 'high';
-  else if (stressScore > 30) stressLevel = 'medium';
+// Fetch real data with fallback to enhanced mock
+const fetchMarketData = async () => {
+  try {
+    const realData = await dataService.fetchAllMarketData();
+    
+    if (realData && Object.keys(realData.rates).length > 0) {
+      const mockData = generateEnhancedMockData();
+      return {
+        ...mockData,
+        current: {
+          ...mockData.current,
+          rates: { ...mockData.current.rates, ...realData.rates },
+          repo: { ...mockData.current.repo, ...realData.repo },
+          spreads: { ...mockData.current.spreads, ...realData.spreads },
+          facilities: { ...mockData.current.facilities, ...realData.facilities },
+        },
+        dataSource: 'hybrid',
+      };
+    }
+  } catch (error) {
+    console.error('Error fetching real data, using enhanced mock:', error.message);
+  }
 
   return {
-    score: Math.round(stressScore),
-    level: stressLevel,
-    volatility: Math.round(volatility * 1000) / 1000,
-    spread: Math.round(spread * 100) / 100,
-    fxVolatility: Math.round(fxVolatility * 10000) / 10000,
+    ...generateEnhancedMockData(),
+    dataSource: 'mock',
   };
 };
 
 // API Routes
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-app.get('/api/market-data', (req, res) => {
-  const { region } = req.query;
-  const data = generateMockData();
-  
-  // Filter by region if specified
-  let filteredData = data;
-  if (region === 'US') {
-    filteredData = {
-      ...data,
-      current: {
-        ...data.current,
-        moneyMarket: {
-          SOFR: data.current.moneyMarket.SOFR,
-          'LIBOR-USD-3M': data.current.moneyMarket['LIBOR-USD-3M'],
-        },
-      },
-    };
-  } else if (region === 'EMEA') {
-    filteredData = {
-      ...data,
-      current: {
-        ...data.current,
-        moneyMarket: {
-          EURIBOR: data.current.moneyMarket.EURIBOR,
-          SONIA: data.current.moneyMarket.SONIA,
-        },
-      },
-    };
-  }
-
-  const stress = calculateStressIndicators(data);
-  
-  res.json({
-    ...filteredData,
-    stress,
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    services: {
+      dataService: 'active',
+      stressAnalyzer: 'active',
+    },
   });
 });
 
-app.get('/api/stress-indicators', (req, res) => {
-  const data = generateMockData();
-  const stress = calculateStressIndicators(data);
-  res.json(stress);
+app.get('/api/market-data', async (req, res) => {
+  try {
+    const { region } = req.query;
+    const data = await fetchMarketData();
+
+    // Update stress analyzer history
+    stressAnalyzer.updateHistory({
+      rates: data.current.rates,
+      spreads: data.current.spreads,
+      facilities: data.current.facilities,
+    });
+
+    // Calculate comprehensive stress analysis
+    const stress = stressAnalyzer.calculateComprehensiveStress(
+      data.current,
+      data.historicalRates || {}
+    );
+
+    // Filter by region if specified
+    let filteredData = data;
+    if (region === 'US') {
+      // Keep US-specific data
+    } else if (region === 'EMEA') {
+      // Keep EMEA-specific data
+    }
+
+    res.json({
+      ...filteredData,
+      stress,
+    });
+  } catch (error) {
+    console.error('Error in /api/market-data:', error);
+    res.status(500).json({ error: 'Failed to fetch market data', message: error.message });
+  }
+});
+
+app.get('/api/repo-rates', async (req, res) => {
+  try {
+    const data = await fetchMarketData();
+    res.json({
+      repo: data.current.repo,
+      spreads: data.current.spreads,
+      facilities: data.current.facilities,
+      timestamp: data.current.timestamp,
+    });
+  } catch (error) {
+    console.error('Error in /api/repo-rates:', error);
+    res.status(500).json({ error: 'Failed to fetch repo rates', message: error.message });
+  }
+});
+
+app.get('/api/reserve-scarcity', async (req, res) => {
+  try {
+    const data = await fetchMarketData();
+    res.json({
+      indicators: data.current.reserveScarcity,
+      spreads: {
+        'EFFR-IORB': data.current.spreads['EFFR-IORB'],
+        'SOFR-IORB': data.current.spreads['SOFR-IORB'],
+        'SOFR-EFFR': data.current.spreads['SOFR-EFFR'],
+      },
+      timestamp: data.current.timestamp,
+    });
+  } catch (error) {
+    console.error('Error in /api/reserve-scarcity:', error);
+    res.status(500).json({ error: 'Failed to fetch reserve scarcity', message: error.message });
+  }
+});
+
+app.get('/api/fed-facilities', async (req, res) => {
+  try {
+    const data = await fetchMarketData();
+    res.json({
+      facilities: data.current.facilities,
+      timestamp: data.current.timestamp,
+    });
+  } catch (error) {
+    console.error('Error in /api/fed-facilities:', error);
+    res.status(500).json({ error: 'Failed to fetch Fed facilities', message: error.message });
+  }
+});
+
+app.get('/api/money-market-spreads', async (req, res) => {
+  try {
+    const data = await fetchMarketData();
+    res.json({
+      spreads: data.current.spreads,
+      reserveScarcity: data.current.reserveScarcity,
+      timestamp: data.current.timestamp,
+    });
+  } catch (error) {
+    console.error('Error in /api/money-market-spreads:', error);
+    res.status(500).json({ error: 'Failed to fetch spreads', message: error.message });
+  }
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📊 Market data API available at http://localhost:${PORT}/api/market-data`);
+  console.log(`📊 Market data API: http://localhost:${PORT}/api/market-data`);
+  console.log(`💱 Repo rates: http://localhost:${PORT}/api/repo-rates`);
+  console.log(`📉 Reserve scarcity: http://localhost:${PORT}/api/reserve-scarcity`);
+  console.log(`🏦 Fed facilities: http://localhost:${PORT}/api/fed-facilities`);
+  console.log(`📈 Money market spreads: http://localhost:${PORT}/api/money-market-spreads`);
+  console.log(`\n💡 To use real data, set API keys in .env file:`);
+  console.log(`   - FRED_API_KEY (for SOFR, EFFR, IORB, repo rates)`);
 });
-
