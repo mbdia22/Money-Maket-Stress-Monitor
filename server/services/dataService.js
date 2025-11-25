@@ -1,9 +1,10 @@
 const axios = require('axios');
+const nyFedService = require('./nyFedService');
 // const bloombergService = require('./bloombergService'); // Uncomment if using Bloomberg
 
 /**
  * Enhanced Data Service for fetching real-time financial data
- * Supports multiple data sources: FRED, FMP, ExchangeRate-API, Bloomberg (optional)
+ * Supports multiple data sources: NY Fed, FRED, FMP, ExchangeRate-API, Bloomberg (optional)
  */
 
 class DataService {
@@ -97,17 +98,16 @@ class DataService {
     return null;
   }
 
-  // Fetch granular repo rates and SOFR components from FRED
+
+  // Fetch granular repo rates - NY Fed API as primary source, FRED as fallback
   async fetchGranularRepoRates() {
     const repoRates = {};
 
-    // Fetch all rates in parallel for better performance
-    const [
-      sofr, bgcr, tgcr, gcf, onrrp, iorb, obfr, effr
-    ] = await Promise.all([
-      this.fetchFREDData('SOFR'),
-      this.fetchFREDData('BGCR'),
-      this.fetchFREDData('TGCR'),
+    // Try NY Fed API first for SOFR, BGCR, TGCR (better data quality)
+    const nyFedRates = await nyFedService.getCurrentRepoRates();
+
+    // Fetch remaining rates from FRED
+    const [gcf, onrrp, iorb, obfr, effr] = await Promise.all([
       this.fetchFREDData('GCFREPO'),
       this.fetchFREDData('RRPONTSYD'),
       this.fetchFREDData('IORB'),
@@ -115,9 +115,32 @@ class DataService {
       this.fetchFREDData('EFFR'),
     ]);
 
-    if (sofr !== null) repoRates.SOFR = sofr;
-    if (bgcr !== null) repoRates.BGCR = bgcr;
-    if (tgcr !== null) repoRates.TGCR = tgcr;
+    // Use NY Fed data if available, otherwise fall back to FRED
+    if (nyFedRates.SOFR !== null) {
+      repoRates.SOFR = nyFedRates.SOFR;
+      console.log('✅ Using SOFR from NY Fed API');
+    } else {
+      const fredSofr = await this.fetchFREDData('SOFR');
+      if (fredSofr !== null) repoRates.SOFR = fredSofr;
+    }
+
+    if (nyFedRates.BGCR !== null) {
+      repoRates.BGCR = nyFedRates.BGCR;
+      console.log('✅ Using BGCR from NY Fed API');
+    } else {
+      const fredBgcr = await this.fetchFREDData('BGCR');
+      if (fredBgcr !== null) repoRates.BGCR = fredBgcr;
+    }
+
+    if (nyFedRates.TGCR !== null) {
+      repoRates.TGCR = nyFedRates.TGCR;
+      console.log('✅ Using TGCR from NY Fed API');
+    } else {
+      const fredTgcr = await this.fetchFREDData('TGCR');
+      if (fredTgcr !== null) repoRates.TGCR = fredTgcr;
+    }
+
+    // Add FRED-only rates
     if (gcf !== null) repoRates.GCF = gcf;
     if (onrrp !== null) repoRates['O/N-RRP'] = onrrp;
     if (iorb !== null) repoRates.IORB = iorb;
@@ -127,12 +150,16 @@ class DataService {
     return repoRates;
   }
 
-  // Fetch historical data for percentile calculation
+
+  // Fetch historical data for percentile calculation and charts (up to 5 years)
   async fetchHistoricalRates(seriesId, days = 30) {
     try {
+      // For 5 years, we need ~1825 days (365 * 5)
       // FRED returns data in reverse chronological order
-      const data = await this.fetchFREDData(seriesId, days * 2); // Get extra to account for weekends
-      
+      // Request extra to account for weekends/holidays
+      const requestDays = days > 365 ? days * 1.5 : days * 2;
+      const data = await this.fetchFREDData(seriesId, Math.ceil(requestDays));
+
       if (data && Array.isArray(data)) {
         // Get last N valid data points
         return data.slice(0, days).map(d => d.value);
@@ -188,41 +215,41 @@ class DataService {
     const indicators = {};
 
     // EFFR-IORB Spread (major reserve scarcity measure)
-    if (rates.EFFR !== null && rates.EFFR !== undefined && 
-        rates.IORB !== null && rates.IORB !== undefined) {
+    if (rates.EFFR !== null && rates.EFFR !== undefined &&
+      rates.IORB !== null && rates.IORB !== undefined) {
       indicators['EFFR-IORB'] = (rates.EFFR - rates.IORB) * 100; // in bps
-      indicators['EFFR-IORB-Status'] = 
-        indicators['EFFR-IORB'] > 0 ? 'SCARCITY' : 
-        indicators['EFFR-IORB'] < -5 ? 'ABUNDANCE' : 'AMPLE';
+      indicators['EFFR-IORB-Status'] =
+        indicators['EFFR-IORB'] > 0 ? 'SCARCITY' :
+          indicators['EFFR-IORB'] < -5 ? 'ABUNDANCE' : 'AMPLE';
     }
 
     // SOFR-IORB Spread (bank activity in repo)
-    if (rates.SOFR !== null && rates.SOFR !== undefined && 
-        rates.IORB !== null && rates.IORB !== undefined) {
+    if (rates.SOFR !== null && rates.SOFR !== undefined &&
+      rates.IORB !== null && rates.IORB !== undefined) {
       indicators['SOFR-IORB'] = (rates.SOFR - rates.IORB) * 100; // in bps
-      indicators['SOFR-IORB-Status'] = 
+      indicators['SOFR-IORB-Status'] =
         indicators['SOFR-IORB'] > 0 ? 'BANKS-DEPLOYING-RESERVES' : 'NORMAL';
     }
 
     // SOFR-EFFR Spread (FHLB repo demand indicator)
-    if (rates.SOFR !== null && rates.SOFR !== undefined && 
-        rates.EFFR !== null && rates.EFFR !== undefined) {
+    if (rates.SOFR !== null && rates.SOFR !== undefined &&
+      rates.EFFR !== null && rates.EFFR !== undefined) {
       indicators['SOFR-EFFR'] = (rates.SOFR - rates.EFFR) * 100; // in bps
     }
 
     // TGCR-RRP Spread (private repo demand vs Fed RRP)
-    if (rates.TGCR !== null && rates.TGCR !== undefined && 
-        rates['O/N-RRP'] !== null && rates['O/N-RRP'] !== undefined) {
+    if (rates.TGCR !== null && rates.TGCR !== undefined &&
+      rates['O/N-RRP'] !== null && rates['O/N-RRP'] !== undefined) {
       indicators['TGCR-RRP'] = (rates.TGCR - rates['O/N-RRP']) * 100; // in bps
-      indicators['TGCR-RRP-Status'] = 
+      indicators['TGCR-RRP-Status'] =
         indicators['TGCR-RRP'] > 0 ? 'EXCESS-COLLATERAL' : 'EXCESS-CASH';
     }
 
     // GCF-TPR Spread (dealer balance sheet capacity)
-    if (rates.GCF !== null && rates.GCF !== undefined && 
-        rates.TGCR !== null && rates.TGCR !== undefined) {
+    if (rates.GCF !== null && rates.GCF !== undefined &&
+      rates.TGCR !== null && rates.TGCR !== undefined) {
       indicators['GCF-TGCR'] = (rates.GCF - rates.TGCR) * 100; // in bps
-      indicators['GCF-TGCR-Status'] = 
+      indicators['GCF-TGCR-Status'] =
         indicators['GCF-TGCR'] > 0 ? 'INFLEXIBLE-BALANCE-SHEETS' : 'FLEXIBLE-BALANCE-SHEETS';
     }
 
@@ -276,7 +303,7 @@ class DataService {
     // This would typically come from swap markets or futures
     // For now, using a simplified calculation
     const fxRates = await this.fetchFXRateFree('USD');
-    
+
     if (!fxRates || !fxRates.EUR) return null;
 
     // Simplified XCCY basis calculation
@@ -306,10 +333,10 @@ class DataService {
   // Aggregate all enhanced market data
   async fetchAllMarketData() {
     console.log('Fetching real-time market data...');
-    
+
     // Try Bloomberg first if enabled (for EMEA rates, XCCY basis, etc.)
     // const bloombergData = await bloombergService.fetchAllMarketData();
-    
+
     const [repoRatesData, fxRates, facilities] = await Promise.all([
       this.getCachedOrFetch('moneyMarket', () => this.fetchMoneyMarketRatesWithPercentiles()),
       this.getCachedOrFetch('fxRates', () => this.fetchFXRateFree('USD')),

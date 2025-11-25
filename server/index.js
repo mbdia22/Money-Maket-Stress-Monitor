@@ -14,7 +14,7 @@ app.use(express.json());
 // Enhanced mock data generator with all sophisticated metrics
 const generateEnhancedMockData = () => {
   const now = new Date();
-  
+
   // Base rates with realistic relationships
   const iorb = 4.50 + (Math.random() - 0.5) * 0.1;
   const effr = iorb - 0.05 + (Math.random() - 0.5) * 0.1;
@@ -68,8 +68,8 @@ const generateEnhancedMockData = () => {
 
   // Reserve scarcity status
   const reserveScarcity = {
-    'EFFR-IORB-Status': spreads['EFFR-IORB'] > 0 ? 'SCARCITY' : 
-                        spreads['EFFR-IORB'] < -5 ? 'ABUNDANCE' : 'AMPLE',
+    'EFFR-IORB-Status': spreads['EFFR-IORB'] > 0 ? 'SCARCITY' :
+      spreads['EFFR-IORB'] < -5 ? 'ABUNDANCE' : 'AMPLE',
     'SOFR-IORB-Status': spreads['SOFR-IORB'] > 0 ? 'BANKS-DEPLOYING-RESERVES' : 'NORMAL',
     'TGCR-RRP-Status': spreads['TGCR-RRP'] > 0 ? 'EXCESS-COLLATERAL' : 'EXCESS-CASH',
     'GCF-TGCR-Status': spreads['GCF-TGCR'] > 0 ? 'INFLEXIBLE-BALANCE-SHEETS' : 'FLEXIBLE-BALANCE-SHEETS',
@@ -167,7 +167,7 @@ const generateEnhancedMockData = () => {
 const fetchMarketData = async () => {
   try {
     const realData = await dataService.fetchAllMarketData();
-    
+
     if (realData && Object.keys(realData.rates).length > 0) {
       const mockData = generateEnhancedMockData();
       return {
@@ -194,8 +194,8 @@ const fetchMarketData = async () => {
 
 // API Routes
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     timestamp: new Date().toISOString(),
     services: {
       dataService: 'active',
@@ -237,6 +237,71 @@ app.get('/api/market-data', async (req, res) => {
   } catch (error) {
     console.error('Error in /api/market-data:', error);
     res.status(500).json({ error: 'Failed to fetch market data', message: error.message });
+  }
+});
+
+// New endpoint for fetching extended historical data (up to 5 years)
+app.get('/api/historical-data', async (req, res) => {
+  try {
+    const { days = 1825 } = req.query; // Default to 5 years (365 * 5)
+    const requestedDays = Math.min(parseInt(days), 1825); // Cap at 5 years
+
+    console.log(`Fetching ${requestedDays} days of historical data...`);
+
+    // Fetch historical data for key series
+    const [sofrData, effrData, iorbData, bgcrData, tgcrData, rrpData] = await Promise.all([
+      dataService.fetchFREDData('SOFR', requestedDays * 2),
+      dataService.fetchFREDData('EFFR', requestedDays * 2),
+      dataService.fetchFREDData('IORB', requestedDays * 2),
+      dataService.fetchFREDData('BGCR', requestedDays * 2),
+      dataService.fetchFREDData('TGCR', requestedDays * 2),
+      dataService.fetchFREDData('RRPONTSYD', requestedDays * 2),
+    ]);
+
+    // Combine data by date
+    const dataByDate = new Map();
+
+    const addToMap = (data, key) => {
+      if (data && Array.isArray(data)) {
+        data.forEach(item => {
+          if (!dataByDate.has(item.date)) {
+            dataByDate.set(item.date, { date: item.date });
+          }
+          dataByDate.get(item.date)[key] = item.value;
+        });
+      }
+    };
+
+    addToMap(sofrData, 'SOFR');
+    addToMap(effrData, 'EFFR');
+    addToMap(iorbData, 'IORB');
+    addToMap(bgcrData, 'BGCR');
+    addToMap(tgcrData, 'TGCR');
+    addToMap(rrpData, 'O/N-RRP');
+
+    // Convert to array and calculate spreads
+    const historical = Array.from(dataByDate.values())
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      .map(item => ({
+        ...item,
+        'EFFR-IORB': item.EFFR && item.IORB ? (item.EFFR - item.IORB) * 100 : null,
+        'SOFR-IORB': item.SOFR && item.IORB ? (item.SOFR - item.IORB) * 100 : null,
+        'SOFR-EFFR': item.SOFR && item.EFFR ? (item.SOFR - item.EFFR) * 100 : null,
+        'TGCR-RRP': item.TGCR && item['O/N-RRP'] ? (item.TGCR - item['O/N-RRP']) * 100 : null,
+      }))
+      .filter(item => item.SOFR || item.EFFR || item.IORB); // Keep only rows with at least one value
+
+    console.log(`✅ Fetched ${historical.length} days of historical data`);
+
+    res.json({
+      historical,
+      count: historical.length,
+      requestedDays,
+      dataSource: 'FRED API'
+    });
+  } catch (error) {
+    console.error('Error in /api/historical-data:', error);
+    res.status(500).json({ error: 'Failed to fetch historical data', message: error.message });
   }
 });
 
