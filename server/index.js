@@ -244,7 +244,7 @@ app.get('/api/market-data', async (req, res) => {
 app.get('/api/historical-data', async (req, res) => {
   try {
     const { days = 1825 } = req.query; // Default to 5 years (365 * 5)
-    const requestedDays = Math.min(parseInt(days), 1825); // Cap at 5 years
+    const requestedDays = Math.min(parseInt(days, 10), 1825); // Cap at 5 years
 
     console.log(`Fetching ${requestedDays} days of historical data...`);
 
