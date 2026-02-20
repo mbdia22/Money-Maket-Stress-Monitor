@@ -11,6 +11,18 @@ class DataService {
   constructor() {
     this.cache = new Map();
     this.cacheTTL = 60000; // 1 minute cache
+
+    // Periodically evict stale entries to prevent unbounded memory growth
+    setInterval(() => this._evictExpiredCache(), this.cacheTTL * 5);
+  }
+
+  _evictExpiredCache() {
+    const cutoff = Date.now() - this.cacheTTL * 2;
+    for (const [key, entry] of this.cache.entries()) {
+      if (entry.timestamp < cutoff) {
+        this.cache.delete(key);
+      }
+    }
   }
 
   // FRED API - Federal Reserve Economic Data (FREE, unlimited)
@@ -358,12 +370,15 @@ class DataService {
     // }
 
     // Calculate FX pairs
+    // ExchangeRate-API with USD base returns units of foreign currency per 1 USD.
+    // EUR/USD and GBP/USD conventions are "USD per 1 unit of foreign currency" -> invert.
+    // USD/JPY and USD/CHF conventions are "foreign currency per 1 USD" -> use directly.
     const fxPairs = {};
     if (fxRates) {
-      fxPairs['EUR/USD'] = fxRates.EUR || null;
-      fxPairs['GBP/USD'] = fxRates.GBP || null;
-      fxPairs['USD/JPY'] = fxRates.JPY ? 1 / fxRates.JPY : null;
-      fxPairs['USD/CHF'] = fxRates.CHF ? 1 / fxRates.CHF : null;
+      fxPairs['EUR/USD'] = fxRates.EUR ? 1 / fxRates.EUR : null;
+      fxPairs['GBP/USD'] = fxRates.GBP ? 1 / fxRates.GBP : null;
+      fxPairs['USD/JPY'] = fxRates.JPY || null;
+      fxPairs['USD/CHF'] = fxRates.CHF || null;
     }
 
     // Calculate all spreads and indicators
