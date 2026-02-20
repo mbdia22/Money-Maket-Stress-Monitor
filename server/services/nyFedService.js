@@ -13,6 +13,18 @@ class NYFedService {
         this.baseURL = 'https://markets.newyorkfed.org/api';
         this.cache = new Map();
         this.cacheTTL = 300000; // 5 minutes cache (data updates once daily ~8am ET)
+
+        // Periodically evict stale entries to prevent unbounded memory growth
+        setInterval(() => this._evictExpiredCache(), this.cacheTTL * 5);
+    }
+
+    _evictExpiredCache() {
+        const cutoff = Date.now() - this.cacheTTL * 2;
+        for (const [key, entry] of this.cache.entries()) {
+            if (entry.timestamp < cutoff) {
+                this.cache.delete(key);
+            }
+        }
     }
 
     /**

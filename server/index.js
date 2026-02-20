@@ -8,8 +8,53 @@ const stressAnalyzer = require('./services/stressAnalyzer');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+// CORS — restrict to configured origins (defaults to localhost dev server)
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',').map(o => o.trim());
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (e.g. server-to-server, curl)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    }
+  },
+}));
+
 app.use(express.json());
+
+// Simple in-memory rate limiter (60 requests/min per IP)
+const rateLimitWindow = 60000;
+const rateLimitMax = 60;
+const requestLog = new Map();
+
+const rateLimiter = (req, res, next) => {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const windowStart = now - rateLimitWindow;
+  const timestamps = (requestLog.get(ip) || []).filter(t => t > windowStart);
+  if (timestamps.length >= rateLimitMax) {
+    return res.status(429).json({ error: 'Too many requests. Please slow down.' });
+  }
+  timestamps.push(now);
+  requestLog.set(ip, timestamps);
+  next();
+};
+
+// Periodically evict old rate-limit records
+setInterval(() => {
+  const windowStart = Date.now() - rateLimitWindow;
+  for (const [ip, timestamps] of requestLog.entries()) {
+    const recent = timestamps.filter(t => t > windowStart);
+    if (recent.length === 0) {
+      requestLog.delete(ip);
+    } else {
+      requestLog.set(ip, recent);
+    }
+  }
+}, rateLimitWindow);
+
+app.use(rateLimiter);
 
 // Enhanced mock data generator with all sophisticated metrics
 const generateEnhancedMockData = () => {
@@ -204,9 +249,37 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Keys that belong to each region
+const US_RATE_KEYS = new Set(['SOFR', 'BGCR', 'TGCR', 'GCF', 'EFFR', 'OBFR', 'IORB', 'O/N-RRP']);
+const EMEA_RATE_KEYS = new Set(['EURIBOR', 'SONIA']);
+
+function filterByRegion(data, region) {
+  if (!region || region === 'ALL') return data;
+
+  const keep = region === 'US' ? US_RATE_KEYS : EMEA_RATE_KEYS;
+
+  const filterRates = (obj) =>
+    obj ? Object.fromEntries(Object.entries(obj).filter(([k]) => keep.has(k))) : {};
+
+  return {
+    ...data,
+    current: {
+      ...data.current,
+      rates: filterRates(data.current.rates),
+      repo: filterRates(data.current.repo),
+      moneyMarket: filterRates(data.current.moneyMarket),
+    },
+  };
+}
+
 app.get('/api/market-data', async (req, res) => {
   try {
     const { region } = req.query;
+    const validRegions = ['US', 'EMEA', 'ALL'];
+    if (region && !validRegions.includes(region)) {
+      return res.status(400).json({ error: `Invalid region. Must be one of: ${validRegions.join(', ')}` });
+    }
+
     const data = await fetchMarketData();
 
     // Update stress analyzer history
@@ -222,13 +295,7 @@ app.get('/api/market-data', async (req, res) => {
       data.historicalRates || {}
     );
 
-    // Filter by region if specified
-    let filteredData = data;
-    if (region === 'US') {
-      // Keep US-specific data
-    } else if (region === 'EMEA') {
-      // Keep EMEA-specific data
-    }
+    const filteredData = filterByRegion(data, region);
 
     res.json({
       ...filteredData,
@@ -243,8 +310,12 @@ app.get('/api/market-data', async (req, res) => {
 // New endpoint for fetching extended historical data (up to 5 years)
 app.get('/api/historical-data', async (req, res) => {
   try {
-    const { days = 1825 } = req.query; // Default to 5 years (365 * 5)
-    const requestedDays = Math.min(parseInt(days, 10), 1825); // Cap at 5 years
+    const rawDays = req.query.days !== undefined ? req.query.days : '1825';
+    const parsedDays = parseInt(rawDays, 10);
+    if (isNaN(parsedDays) || parsedDays < 1) {
+      return res.status(400).json({ error: 'Invalid days parameter. Must be a positive integer.' });
+    }
+    const requestedDays = Math.min(parsedDays, 1825); // Cap at 5 years
 
     console.log(`Fetching ${requestedDays} days of historical data...`);
 

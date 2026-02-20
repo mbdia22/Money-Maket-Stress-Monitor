@@ -29,7 +29,7 @@ interface MarketData {
 
 export default function Home() {
   const [data, setData] = useState<MarketData | null>(null);
-  const [historicalData, setHistoricalData] = useState<any[]>([]);
+  const [historicalData, setHistoricalData] = useState<Array<{ date: string; [key: string]: string | number | null }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
